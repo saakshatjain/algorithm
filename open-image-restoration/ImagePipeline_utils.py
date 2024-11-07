@@ -331,222 +331,138 @@ def reset_gpu(device = 0):
 import os, time, datetime
 #import PIL.Image as Image
 import numpy as np
-from skimage.measure import compare_psnr, compare_ssim
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from skimage.io import imread, imsave
+from PIL import Image, ImageDraw, ImageFont
+import shutil
+import subprocess
+from glob import glob
+from copy import deepcopy
 
 def to_tensor(img):
-	if img.ndim == 2:
-		return img[np.newaxis,...,np.newaxis]
-	elif img.ndim == 3:
-		return np.moveaxis(img,2,0)[...,np.newaxis]
+    if img.ndim == 2:
+        return img[np.newaxis, ..., np.newaxis]
+    elif img.ndim == 3:
+        return np.moveaxis(img, 2, 0)[..., np.newaxis]
 
 def from_tensor(img):
-	return np.squeeze(np.moveaxis(img[...,0],0,-1))
+    return np.squeeze(np.moveaxis(img[..., 0], 0, -1))
 
-def save_result(result,path):
-	path = path if path.find('.') != -1 else path+'.png'
-	ext = os.path.splitext(path)[-1]
-	if ext in ('.txt','.dlm'):
-		np.savetxt(path,result,fmt='%2.4f')
-	else:
-		imsave(path,np.clip(result,0,1))
-
-fontfile = os.path.join(utilspath,"arial.ttf")
-
-def addnoise(im, sigma = 10, imagetype = 'L', add_label = False):
-	
-	x = np.array(im)
-	y = x + np.random.normal(0, sigma, x.shape)
-	y=np.clip(y, 0, 255)
-	
-	im = PIL.Image.fromarray(y.astype('uint8'), imagetype)
-
-	if add_label:
-		d = ImageDraw.Draw(im)
-		fnt = ImageFont.truetype(fontfile, 40)
-		if imagetype == 'L':
-			fill = 240
-		elif imagetype == 'RGB':
-			fill = (255, 0, 0)
-		elif imagetype == 'RGBA':
-			fill = (255,0,0,0)
-		d.text((10,10), "sigma = %s" % sigma, font = fnt, fill = fill)
-
-	return im
-
+def save_result(result, path):
+    path = path if path.find('.') != -1 else path + '.png'
+    ext = os.path.splitext(path)[-1]
+    if ext in ('.txt', '.dlm'):
+        np.savetxt(path, result, fmt='%2.4f')
+    else:
+        imsave(path, np.clip(result, 0, 1))
 
 utilspath = os.path.join(os.getcwd(), 'utils/')
+fontfile = os.path.join(utilspath, "arial.ttf")
 
-fontfile = os.path.join(utilspath,"arial.ttf")
+def addnoise(im, sigma=10, imagetype='L', add_label=False):
+    x = np.array(im)
+    y = x + np.random.normal(0, sigma, x.shape)
+    y = np.clip(y, 0, 255)
+    im = Image.fromarray(y.astype('uint8'), imagetype)
 
-def concat_images(img_list, labels = [], imagetype = None, sameheight = True, imagewidth = None, imageheight = None, labelsize = 30, labelpos = (10,10), labelcolor = None):
+    if add_label:
+        d = ImageDraw.Draw(im)
+        fnt = ImageFont.truetype(fontfile, 40)
+        fill = 240 if imagetype == 'L' else (255, 0, 0) if imagetype == 'RGB' else (255, 0, 0, 0)
+        d.text((10, 10), f"sigma = {sigma}", font=fnt, fill=fill)
 
-	"""
-	imagetype: allow to convert all images to a PIL.Image.mode (L = grayscale, RGB, RGBA, ...)
-	sameheight: put all images to same height (size of smallest image of the list, or imageheight if not None)
-	imageheight: if not None, force all images to have this height (keep aspect ratio). Force sameheight to True
-	imagewidth: if not None, force all images to have this width (keep aspect ratio if sameheight=False and imageheight=None)
-	"""
-	images = deepcopy(img_list)
-	
-	if imagetype == None:
-		imagetype = 'RGB'
-	
-	images = [im.convert(imagetype) for im in images]
-	
-	#force all image to imageheight (keep aspect ratio)
-	if imageheight is not None:
-		sameheight = True
-		
-	widths, heights = zip(*(i.size for i in images))
-	
-	#resize needed ?
-	if ( (len(set(heights)) > 1) & sameheight ) or (imageheight is not None) or (imagewidth is not None):
-		
-		if imageheight is None:
-			imageheight = min(heights)
+    return im
 
-		#force all images to same width
-		if imagewidth is not None:
-			if sameheight: #force width and height
-				images = [im.resize( (int(imagewidth),int(imageheight)),PIL.Image.ANTIALIAS ) for im in images]
-			else: #force width (keep aspect ratio)
-				images = [im.resize( (int(imagewidth),int(im.height*imagewidth/im.width)),PIL.Image.ANTIALIAS ) for im in images]
-		else: #force height (keep aspect ratio)
-			images = [im.resize( (int(im.width*imageheight/im.height), imageheight) ,PIL.Image.ANTIALIAS) for im in images]
-			
+def concat_images(img_list, labels=[], imagetype=None, sameheight=True, imagewidth=None, imageheight=None, labelsize=30, labelpos=(10, 10), labelcolor=None):
+    images = deepcopy(img_list)
+    imagetype = imagetype or 'RGB'
+    images = [im.convert(imagetype) for im in images]
+    
+    if imageheight is not None:
+        sameheight = True
 
-	widths, heights = zip(*(i.size for i in images))
-	total_width = sum(widths)
-	max_height = max(heights)
+    widths, heights = zip(*(i.size for i in images))
+    if ((len(set(heights)) > 1) & sameheight) or (imageheight is not None) or (imagewidth is not None):
+        imageheight = imageheight or min(heights)
+        if imagewidth is not None:
+            images = [im.resize((int(imagewidth), int(imageheight)), Image.ANTIALIAS) if sameheight else
+                      im.resize((int(imagewidth), int(im.height * imagewidth / im.width)), Image.ANTIALIAS) for im in images]
+        else:
+            images = [im.resize((int(im.width * imageheight / im.height), imageheight), Image.ANTIALIAS) for im in images]
 
-	new_im = PIL.Image.new(imagetype, (total_width, max_height))
+    widths, heights = zip(*(i.size for i in images))
+    total_width = sum(widths)
+    max_height = max(heights)
 
-	#add labels to images
-	if len(labels) == len(images):
+    new_im = Image.new(imagetype, (total_width, max_height))
 
-		fnt = ImageFont.truetype(fontfile, labelsize)
-		if imagetype == 'L':
-			fill = 240
-		elif imagetype == 'RGB':
-			fill = (176,196,222)
-		elif imagetype == 'RGBA':
-			fill = (176,196,222,0)
+    if len(labels) == len(images):
+        fnt = ImageFont.truetype(fontfile, labelsize)
+        fill = 240 if imagetype == 'L' else (176, 196, 222) if imagetype == 'RGB' else (176, 196, 222, 0)
+        fill = labelcolor or fill
+        for i in range(len(labels)):
+            ImageDraw.Draw(images[i]).text(labelpos, labels[i], font=fnt, fill=fill)
 
-		if labelcolor is not None:
-			fill = labelcolor
+    x_offset = 0
+    for im in images:
+        new_im.paste(im, (x_offset, 0))
+        x_offset += im.size[0]
 
-		for i in range(len(labels)):
-			d = ImageDraw.Draw(images[i]).text(labelpos, labels[i], font = fnt, fill = fill)
+    return new_im
 
-	x_offset = 0
-	for im in images:
-		new_im.paste(im, (x_offset,0))
-		x_offset += im.size[0]
-	
-	return new_im
-
-def display_images(im_list, labels = [], **kwargs):
-	display(concat_images(im_list, labels, **kwargs))
+def display_images(im_list, labels=[], **kwargs):
+    display(concat_images(im_list, labels, **kwargs))
 
 def get_filepaths(directory):
-	files = [os.path.join(directory, file) for file in os.listdir(directory) if os.path.isfile(os.path.join(directory, file))]
-	return files
+    return [os.path.join(directory, file) for file in os.listdir(directory) if os.path.isfile(os.path.join(directory, file))]
 
 def get_filenames(directory):
-	files = [file for file in os.listdir(directory) if os.path.isfile(os.path.join(directory, file))]
-	return files
+    return [file for file in os.listdir(directory) if os.path.isfile(os.path.join(directory, file))]
 
-def display_folder(directory, limit = 10, **kwargs):
-	
-	files = get_filepaths(directory)
-	files.sort()
-	if len(files) > limit:
-		files = files[:limit]
-	
-	display_images([PIL.Image.open(f) for f in files], [os.path.split(f)[1] for f in files], **kwargs)
+def display_folder(directory, limit=10, **kwargs):
+    files = get_filepaths(directory)
+    files.sort()
+    files = files[:limit] if len(files) > limit else files
+    display_images([Image.open(f) for f in files], [os.path.split(f)[1] for f in files], **kwargs)
 
-def compare_folders(dirs, labels = [], **kwargs):
+def compare_folders(dirs, labels=[], **kwargs):
+    dirlist = dirs if isinstance(dirs, list) else [d for d in glob(os.path.join(dirs, '*')) if os.path.isdir(d)]
+    names = sorted(get_filenames(dirlist[0]))
+    for n in names:
+        paths = [glob(os.path.join(d, os.path.splitext(n)[0] + '*'))[0] for d in dirlist]
+        display_images([Image.open(p) for p in paths], [os.path.split(d)[1] for d in dirlist], **kwargs)
 
-	if type(dirs) is list:
-		#dirs is a list of folders containings processed images to compare
-		dirlist = dirs
-		
-	elif type(dirs) is str:
-		#dirs if parent folder of subfolders containings processed images to compare
-		dirlist = glob(os.path.join(dirs,'*'))
-		dirlist = [d for d in dirlist if os.path.isdir(d)]
-
-	first_dir = dirlist[0]
-	names = get_filenames(first_dir)
-	names.sort()
-	for n in names:
-		paths = [glob(os.path.join(d,osp.splitext(n)[0]+'*'))[0] for d in dirlist]
-		display_images([PIL.Image.open(p) for p in paths], [os.path.split(d)[1] for d in dirlist], **kwargs)
-
-
-def clone_git(url, dir_name = None, tag = None, reclone = False):
-
-	"""	
-	url: url of the git repository to clone
-	dir_name: name of the folder to give to the repository. If not given, the git repository name is used
-	tag: allows to checkout a specific commit if given
-	reclone: overwrite existing repo
-	"""
-	
-	old_dir = os.getcwd()
-	
-	if dir_name is None:		
-		dir_name = os.path.split(url)[1] #use git repo name
-		dir_name = os.path.splitext(dir_name)[0] #remove ".git" if present
-	
-	if reclone and os.path.exists(dir_name):
-		shutil.rmtree(dir_name)
-		
-	if not os.path.exists(dir_name):
-		command = "git clone %s %s" % (url, dir_name)
-		subprocess.run(command, shell = True)
-		
-	os.chdir(dir_name)
-	
-	if tag is not None:
-		command = "git checkout %s" % tag
-		subprocess.run(command, shell = True)
-	
-	git_path = os.path.join(os.getcwd())
-	
-	os.chdir(old_dir)
-	
-	return git_path
+def clone_git(url, dir_name=None, tag=None, reclone=False):
+    old_dir = os.getcwd()
+    dir_name = dir_name or os.path.splitext(os.path.split(url)[1])[0]
+    
+    if reclone and os.path.exists(dir_name):
+        shutil.rmtree(dir_name)
+        
+    if not os.path.exists(dir_name):
+        subprocess.run(f"git clone {url} {dir_name}", shell=True)
+        
+    os.chdir(dir_name)
+    if tag is not None:
+        subprocess.run(f"git checkout {tag}", shell=True)
+    os.chdir(old_dir)
+    
+    return os.path.join(os.getcwd(), dir_name)
 
 def download_gdrive(file_id):
-	
-	subprocess.run("wget https://raw.githubusercontent.com/GitHub30/gdrive.sh/master/gdrive.sh", shell = True)
-	subprocess.run("curl gdrive.sh | bash -s %s" % file_id, shell = True)
-	subprocess.run("rm gdrive.sh", shell = True)
-	
+    subprocess.run("wget https://raw.githubusercontent.com/GitHub30/gdrive.sh/master/gdrive.sh", shell=True)
+    subprocess.run(f"curl gdrive.sh | bash -s {file_id}", shell=True)
+    subprocess.run("rm gdrive.sh", shell=True)
+
 def image_average(imlist, weights):
-	
-	assert len(imlist)==len(weights), "Input lists should have same size."
-	weights = np.array(weights)
-	weights = weights/np.sum(weights)
-	
-	# Assuming all images are the same size, get dimensions of first image
-	w,h=Image.open(imlist[0]).convert("RGB").size
-	N=len(imlist)
+    assert len(imlist) == len(weights), "Input lists should have same size."
+    weights = np.array(weights) / np.sum(weights)
+    w, h = Image.open(imlist[0]).convert("RGB").size
 
-	# Create a numpy array of floats to store the average (assume RGB images)
-	arr=np.zeros((h,w,3),np.float)
+    arr = np.zeros((h, w, 3), np.float)
+    for im in imlist:
+        imarr = np.array(Image.open(im), dtype=np.float)
+        arr = arr + imarr / len(imlist)
 
-	# Build up average pixel intensities, casting each image as an array of floats
-	for im in imlist:
-		imarr=np.array(Image.open(im),dtype=np.float)
-		arr=arr+imarr/N
-
-	# Round values in array and cast as 8-bit integer
-	arr=np.array(np.round(arr),dtype=np.uint8)
-
-	# Generate, save and preview final image
-	out=Image.fromarray(arr,mode="RGB")
-	
-	return out
+    arr = np.array(np.round(arr), dtype=np.uint8)
+    return Image.fromarray(arr, mode="RGB")
